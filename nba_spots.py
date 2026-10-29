@@ -23,6 +23,7 @@ MARKETS = {
 }
 WINDOWS = (5, 10, 20)
 PARIS = ZoneInfo("Europe/Paris")
+STATS = {"ok": 0, "ko": 0}
 
 
 def get_events(key):
@@ -74,14 +75,18 @@ def game_log(name, cache):
     games = []
     for season in (f"{y}-{str(y + 1)[2:]}", f"{y - 1}-{str(y)[2:]}"):
         df = None
-        for _ in range(3):
+        for _ in range(2):
             try:
                 time.sleep(0.7)  # stats.nba.com limite le débit
                 df = playergamelog.PlayerGameLog(player_id=found[0]["id"], season=season,
-                                                 timeout=30).get_data_frames()[0]
+                                                 timeout=12).get_data_frames()[0]
                 break
             except Exception:
-                time.sleep(2)
+                time.sleep(1)
+        STATS["ok" if df is not None else "ko"] += 1
+        if STATS["ko"] >= 3 and STATS["ok"] == 0:
+            sys.exit("stats.nba.com est injoignable depuis ce serveur (blocage probable).")
+        print("  stats", name, "OK" if df is not None else "échec", flush=True)
         if df is not None:
             games += df[["PTS", "REB", "AST"]].to_dict("records")
         if len(games) >= 20:
@@ -165,6 +170,7 @@ def main():
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--out", default="nba_spots.html")
     a = ap.parse_args()
+    sys.stdout.reconfigure(line_buffering=True)
     day = (datetime.now(PARIS) + timedelta(days=a.days)).date()
     if a.demo:
         matches = demo()
