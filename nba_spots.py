@@ -224,22 +224,24 @@ button{background:none;color:var(--fg);border:1px solid var(--line);border-radiu
 button.on{background:var(--acc);color:var(--accfg);border-color:var(--acc)}button.on small{color:inherit}
 input{width:70px;padding:6px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--fg);font:inherit}
 .wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{padding:7px 6px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+button.m{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;margin:0 0 6px;padding:11px 12px}
 th{font-size:12px;color:var(--mut)}td b{color:var(--ok)}p{color:var(--mut);font-size:12px}
 </style></head><body>
 <h1>Spots NBA – __DAY__</h1>
 <small>Mis à jour le __NOW__ __LINK__</small>
-<div class="row" id="tabs"></div>
 <div class="row"><span id="wins"></span><label>Cote min <input id="min" type="number" step="0.05" value="1.5"></label></div>
-<div class="wrap"><table><thead><tr><th>Joueur</th><th>Stat</th><th>Pari</th><th>Proba</th><th>Cote</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div id="list"></div>
 <p>Proba = fréquence à laquelle la ligne a été battue sur les N derniers matchs (pas une prédiction). Cotes indicatives, meilleure cote trouvée parmi les bookmakers interrogés.</p>
 <script>
-const D=__DATA__;let cur=0,W=10,MIN=1.5;const $=s=>document.querySelector(s);
+const D=__DATA__;let cur=-1,W=10,MIN=1.5;const $=s=>document.querySelector(s);
+const sp=m=>m.spots.filter(s=>s["p"+W]!=null&&s.o>=MIN).sort((a,b)=>b["p"+W]-a["p"+W]||b.o-a.o);
 function render(){
-$("#tabs").innerHTML=D.map((m,i)=>`<button class="${i==cur?"on":""}" onclick="cur=${i};render()">${m.t}<small>${m.h}</small></button>`).join("");
 $("#wins").innerHTML=[5,10,20].map(n=>`<button class="${n==W?"on":""}" onclick="W=${n};render()">${n} matchs</button>`).join(" ");
-const m=D[cur];if(!m){$("#rows").innerHTML="<tr><td colspan=5>Aucun match.</td></tr>";return}
-const rows=m.spots.filter(s=>s["p"+W]!=null&&s.o>=MIN).sort((a,b)=>b["p"+W]-a["p"+W]||b.o-a.o);
-$("#rows").innerHTML=rows.map(s=>`<tr><td>${s.j}</td><td>${s.m}</td><td>${s.s=="Over"?"Plus de":"Moins de"} ${s.l}</td><td><b>${s["p"+W]} %</b><small>${s["n"+W]} matchs</small></td><td>${s.o.toFixed(2)}<small>${s.b}</small></td></tr>`).join("")||"<tr><td colspan=5>Aucun spot à cette cote.</td></tr>";}
+if(!D.length){$("#list").innerHTML="<p>Aucun match.</p>";return}
+$("#list").innerHTML=D.map((m,i)=>{const r=sp(m),o=i==cur;
+let h=`<button class="m ${o?"on":""}" onclick="cur=${o?-1:i};render()"><span>${m.t}<small>${m.h}</small></span><span>${r.length} spots ${o?"▴":"▾"}</span></button>`;
+if(o)h+=`<div class="wrap"><table><thead><tr><th>Joueur</th><th>Stat</th><th>Pari</th><th>Proba</th><th>Cote</th></tr></thead><tbody>${r.map(s=>`<tr><td>${s.j}</td><td>${s.m}</td><td>${s.s=="Over"?"Plus de":"Moins de"} ${s.l}</td><td><b>${s["p"+W]} %</b><small>${s["n"+W]} matchs</small></td><td>${s.o.toFixed(2)}<small>${s.b}</small></td></tr>`).join("")||"<tr><td colspan=5>Aucun spot à cette cote.</td></tr>"}</tbody></table></div>`;
+return h}).join("")}
 $("#min").oninput=e=>{MIN=parseFloat(e.target.value)||0;render()};render();
 </script></body></html>"""
 
