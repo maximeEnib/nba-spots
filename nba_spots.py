@@ -8,7 +8,7 @@ Usage         : python nba_spots.py            (matchs à J+1, heure de Paris)
                 python nba_spots.py --demo     (fausses données, pour voir la page)
 """
 import argparse, json, os, random, re, sys, time, unicodedata
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 API = "https://api.the-odds-api.com/v4/sports/basketball_nba"
@@ -89,21 +89,25 @@ def load_logs(teams, n=20):
     """Remplit LOGS avec les box scores des n derniers matchs de chaque équipe (API publique ESPN)."""
     now = datetime.now(PARIS)
     y = now.year if now.month >= 10 else now.year - 1
-    sb = get_json(f"{ESPN}/scoreboard", {"dates": f"{y}1001-{now.strftime('%Y%m%d')}", "limit": 1500})
-    evs = [e for e in sb.get("events", [])
-           if e["status"]["type"].get("completed") and e.get("season", {}).get("type", 2) == 2]
-    evs.sort(key=lambda e: e["date"], reverse=True)
     count, pick = {tkey(t): 0 for t in teams}, []
-    for e in evs:
-        hit = False
-        for c in e["competitions"][0]["competitors"]:
-            t = tkey(c["team"]["displayName"])
-            if t in count and count[t] < n:
-                count[t] += 1
-                hit = True
-        if hit:
-            pick.append(e["id"])
-    print(f"{len(evs)} matchs terminés, {len(pick)} box scores à lire", flush=True)
+    day, stop, nreq = now.date(), date(y, 10, 1), 0
+    while day >= stop and any(c < n for c in count.values()):  # on remonte jour par jour
+        sb = get_json(f"{ESPN}/scoreboard", {"dates": day.strftime("%Y%m%d")})
+        nreq += 1
+        evs = [e for e in sb.get("events", [])
+               if e["status"]["type"].get("completed") and e.get("season", {}).get("type", 2) == 2]
+        for e in sorted(evs, key=lambda e: e["date"], reverse=True):
+            hit = False
+            for c in e["competitions"][0]["competitors"]:
+                t = tkey(c["team"]["displayName"])
+                if t in count and count[t] < n:
+                    count[t] += 1
+                    hit = True
+            if hit:
+                pick.append(e["id"])
+        day -= timedelta(days=1)
+        time.sleep(0.15)
+    print(f"{nreq} jours lus, {len(pick)} box scores à lire", flush=True)
     for eid in pick:
         box = get_json(f"{ESPN}/summary", {"event": eid}).get("boxscore", {})
         for tm in box.get("players", []):
