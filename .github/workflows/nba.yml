@@ -1,0 +1,39 @@
+name: Spots NBA
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # tous les jours à 8h UTC
+  workflow_dispatch:       # bouton « Run workflow » pour lancer à la main
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install nba_api requests
+      - run: |
+          mkdir -p site
+          python nba_spots.py --out site/index.html
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
