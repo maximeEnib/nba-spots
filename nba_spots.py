@@ -139,6 +139,47 @@ def load_logs(teams, n=20):
     print(len(LOGS), "joueurs avec stats", flush=True)
 
 
+def load_logs_csv(teams, n=20):
+    """Plan B : box scores déjà compilés (sportsdataverse, source ESPN) publiés sur GitHub, sans blocage."""
+    import csv, io, requests
+    now = datetime.now(PARIS)
+    y = (now.year if now.month >= 10 else now.year - 1) + 1
+    urls = [f"https://github.com/sportsdataverse/sportsdataverse-data/releases/download/espn_nba_player_boxscores/player_box_{y}.csv",
+            f"https://raw.githubusercontent.com/sportsdataverse/hoopR-nba-data/main/nba/player_box/csv/player_box_{y}.csv"]
+    text, err = None, ""
+    for u in urls:
+        try:
+            r = requests.get(u, headers=HDR, timeout=120)
+            err = f"HTTP {r.status_code} sur {u}"
+            r.raise_for_status()
+            text = r.content.decode("utf-8-sig")
+            break
+        except Exception as e:
+            err = err or str(e)
+    if text is None:
+        raise RuntimeError(f"fichier de stats introuvable ({err})")
+    rows = []
+    for d in csv.DictReader(io.StringIO(text)):
+        if str(d.get("season_type", "2")) not in ("2", "2.0"):
+            continue
+        if str(d.get("did_not_play", "")).lower() == "true":
+            continue
+        try:
+            if float(d["minutes"]) <= 0:
+                continue
+            rows.append((d["game_date"], d["athlete_display_name"],
+                         {"PTS": int(float(d["points"])), "REB": int(float(d["rebounds"])),
+                          "AST": int(float(d["assists"]))}))
+        except (ValueError, KeyError):
+            continue
+    if not rows:
+        raise RuntimeError("fichier de stats vide")
+    rows.sort(key=lambda r: r[0], reverse=True)
+    for _, name, row in rows:
+        LOGS.setdefault(norm(name), []).append(row)
+    print(f"Plan B : {len(LOGS)} joueurs, dernier match du {rows[0][0]}", flush=True)
+
+
 def build_spots(props, cache):
     spots = []
     for (player, mk, side, line), (price, book) in props.items():
@@ -232,7 +273,12 @@ def main():
         try:
             load_logs(teams)
         except RuntimeError as ex:
-            sys.exit(f"Stats indisponibles : {ex}")
+            print("ESPN direct indisponible :", ex, flush=True)
+            LOGS.clear()
+            try:
+                load_logs_csv(teams)
+            except RuntimeError as ex2:
+                sys.exit(f"Stats indisponibles : {ex2}")
         for ev in today:
             print("→", ev["away_team"], "@", ev["home_team"])
             spots = build_spots(get_props(key, ev, a.regions), cache)
