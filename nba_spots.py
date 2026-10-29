@@ -16,10 +16,6 @@ MARKETS = {
     "player_points": ("Points", ("PTS",)),
     "player_rebounds": ("Rebonds", ("REB",)),
     "player_assists": ("Passes", ("AST",)),
-    "player_points_assists": ("Pts + Passes", ("PTS", "AST")),
-    "player_points_rebounds": ("Pts + Rebonds", ("PTS", "REB")),
-    "player_rebounds_assists": ("Rebonds + Passes", ("REB", "AST")),
-    "player_points_rebounds_assists": ("Pts + Reb + Passes", ("PTS", "REB", "AST")),
 }
 WINDOWS = (5, 10, 20)
 PARIS = ZoneInfo("Europe/Paris")
