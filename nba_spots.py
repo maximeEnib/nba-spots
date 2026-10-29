@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Spots NBA : stats joueurs (cdn.nba.com) + cotes indicatives (The Odds API) -> nba_spots.html
+"""Spots NBA : stats joueurs (ESPN) + cotes indicatives (The Odds API) -> nba_spots.html
 
 Installation : pip install requests
 Clé gratuite  : https://the-odds-api.com  (export ODDS_API_KEY=ta_cle)
@@ -54,8 +54,8 @@ def get_props(key, ev, regions):
     return best
 
 
-CDN = "https://cdn.nba.com/static/json"
-HDR = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/", "Accept": "application/json"}
+ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
+HDR = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 LOGS = {}  # nom normalisé -> [{"PTS","REB","AST"}, ...] du plus récent au plus ancien
 
 
@@ -66,43 +66,63 @@ def norm(s):
     return " ".join(w for w in s.split() if w not in ("jr", "sr", "ii", "iii", "iv"))
 
 
-def cdn_get(path):
+def tkey(name):
+    n = name.lower().strip()
+    return "los angeles clippers" if n == "la clippers" else n
+
+
+def get_json(url, params=None):
     import requests
     err = None
     for _ in range(2):
         try:
-            r = requests.get(f"{CDN}/{path}", headers=HDR, timeout=15)
+            r = requests.get(url, params=params, headers=HDR, timeout=20)
             r.raise_for_status()
             return r.json()
         except Exception as e:
             err = e
             time.sleep(1)
-    raise RuntimeError(f"cdn.nba.com injoignable ({err})")
+    raise RuntimeError(f"espn.com injoignable ({err})")
 
 
 def load_logs(teams, n=20):
-    """Remplit LOGS avec les box scores des n derniers matchs de chaque équipe (CDN officiel NBA)."""
-    dates = cdn_get("staticData/scheduleLeagueV2_1.json")["leagueSchedule"]["gameDates"]
-    games = [g for d in dates for g in d["games"]
-             if g["gameStatus"] == 3 and g["gameId"].startswith("002")]
-    games.sort(key=lambda g: g["gameDateTimeUTC"], reverse=True)
-    count, pick = {t: 0 for t in teams}, {}
-    for g in games:
-        for side in ("homeTeam", "awayTeam"):
-            t = f'{g[side]["teamCity"]} {g[side]["teamName"]}'
+    """Remplit LOGS avec les box scores des n derniers matchs de chaque équipe (API publique ESPN)."""
+    now = datetime.now(PARIS)
+    y = now.year if now.month >= 10 else now.year - 1
+    sb = get_json(f"{ESPN}/scoreboard", {"dates": f"{y}1001-{now.strftime('%Y%m%d')}", "limit": 1500})
+    evs = [e for e in sb.get("events", [])
+           if e["status"]["type"].get("completed") and e.get("season", {}).get("type", 2) == 2]
+    evs.sort(key=lambda e: e["date"], reverse=True)
+    count, pick = {tkey(t): 0 for t in teams}, []
+    for e in evs:
+        hit = False
+        for c in e["competitions"][0]["competitors"]:
+            t = tkey(c["team"]["displayName"])
             if t in count and count[t] < n:
                 count[t] += 1
-                pick[g["gameId"]] = g
-    print(f"{len(pick)} box scores à lire", flush=True)
-    for gid, g in sorted(pick.items(), key=lambda kv: kv[1]["gameDateTimeUTC"], reverse=True):
-        box = cdn_get(f"liveData/boxscore/boxscore_{gid}.json")["game"]
-        for side in ("homeTeam", "awayTeam"):
-            for pl in box[side]["players"]:
-                st = pl["statistics"]
-                if not st.get("minutes") or st["minutes"].startswith("PT00M00"):
-                    continue  # n'a pas joué
-                LOGS.setdefault(norm(pl["name"]), []).append(
-                    {"PTS": st["points"], "REB": st["reboundsTotal"], "AST": st["assists"]})
+                hit = True
+        if hit:
+            pick.append(e["id"])
+    print(f"{len(evs)} matchs terminés, {len(pick)} box scores à lire", flush=True)
+    for eid in pick:
+        box = get_json(f"{ESPN}/summary", {"event": eid}).get("boxscore", {})
+        for tm in box.get("players", []):
+            for grp in tm.get("statistics", []):
+                lab = grp.get("labels", [])
+                idx = {k: lab.index(k) for k in ("MIN", "PTS", "REB", "AST") if k in lab}
+                if len(idx) < 4:
+                    continue
+                for a in grp.get("athletes", []):
+                    st = a.get("stats") or []
+                    if a.get("didNotPlay") or len(st) < len(lab):
+                        continue
+                    try:
+                        if float(st[idx["MIN"]]) <= 0:
+                            continue
+                        row = {k: int(st[idx[k]]) for k in ("PTS", "REB", "AST")}
+                    except ValueError:
+                        continue  # n'a pas joué
+                    LOGS.setdefault(norm(a["athlete"]["displayName"]), []).append(row)
         time.sleep(0.2)
     if not LOGS:
         raise RuntimeError("aucune statistique récupérée")
