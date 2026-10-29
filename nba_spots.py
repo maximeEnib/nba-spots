@@ -54,8 +54,12 @@ def get_props(key, ev, regions):
     return best
 
 
-ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
-HDR = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+HOSTS = ["https://site.api.espn.com/apis/site/v2/sports/basketball/nba",
+         "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba"]
+HDR = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                     "Chrome/124.0 Safari/537.36",
+       "Accept": "application/json, text/plain, */*", "Accept-Language": "en-US,en;q=0.9",
+       "Referer": "https://www.espn.com/", "Origin": "https://www.espn.com"}
 LOGS = {}  # nom normalisé -> [{"PTS","REB","AST"}, ...] du plus récent au plus ancien
 
 
@@ -71,16 +75,18 @@ def tkey(name):
     return "los angeles clippers" if n == "la clippers" else n
 
 
-def get_json(url, params=None):
+def get_json(path, params=None):
     import requests
-    err = None
-    for _ in range(2):
+    err = ""
+    for host in HOSTS + HOSTS[:1]:
         try:
-            r = requests.get(url, params=params, headers=HDR, timeout=20)
+            r = requests.get(host + path, params=params, headers=HDR, timeout=20)
+            err = f"HTTP {r.status_code}, {r.headers.get('content-type', '?')}, début : {r.text[:120]!r}"
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            err = e
+            if not err:
+                err = str(e)
             time.sleep(1)
     raise RuntimeError(f"espn.com injoignable ({err})")
 
@@ -92,7 +98,7 @@ def load_logs(teams, n=20):
     count, pick = {tkey(t): 0 for t in teams}, []
     day, stop, nreq = now.date(), date(y, 10, 1), 0
     while day >= stop and any(c < n for c in count.values()):  # on remonte jour par jour
-        sb = get_json(f"{ESPN}/scoreboard", {"dates": day.strftime("%Y%m%d")})
+        sb = get_json("/scoreboard", {"dates": day.strftime("%Y%m%d")})
         nreq += 1
         evs = [e for e in sb.get("events", [])
                if e["status"]["type"].get("completed") and e.get("season", {}).get("type", 2) == 2]
@@ -109,7 +115,7 @@ def load_logs(teams, n=20):
         time.sleep(0.15)
     print(f"{nreq} jours lus, {len(pick)} box scores à lire", flush=True)
     for eid in pick:
-        box = get_json(f"{ESPN}/summary", {"event": eid}).get("boxscore", {})
+        box = get_json("/summary", {"event": eid}).get("boxscore", {})
         for tm in box.get("players", []):
             for grp in tm.get("statistics", []):
                 lab = grp.get("labels", [])
