@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Spots NBA : stats joueurs (nba_api) + cotes indicatives (The Odds API) -> nba_spots.html
+"""Spots NBA : stats joueurs (cdn.nba.com) + cotes indicatives (The Odds API) -> nba_spots.html
 
-Installation : pip install nba_api requests
+Installation : pip install requests
 Clé gratuite  : https://the-odds-api.com  (export ODDS_API_KEY=ta_cle)
 Usage         : python nba_spots.py            (matchs à J+1, heure de Paris)
                 python nba_spots.py --days 2   (autre jour)
                 python nba_spots.py --demo     (fausses données, pour voir la page)
 """
-import argparse, json, os, random, sys, time, unicodedata
+import argparse, json, os, random, re, sys, time, unicodedata
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -54,51 +54,65 @@ def get_props(key, ev, regions):
     return best
 
 
+CDN = "https://cdn.nba.com/static/json"
+HDR = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/", "Accept": "application/json"}
+LOGS = {}  # nom normalisé -> [{"PTS","REB","AST"}, ...] du plus récent au plus ancien
+
+
 def norm(s):
     s = unicodedata.normalize("NFKD", s)
-    return "".join(c for c in s if not unicodedata.combining(c)).lower().replace(".", "").strip()
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower()
+    s = re.sub(r"[.'’\-]", "", s)
+    return " ".join(w for w in s.split() if w not in ("jr", "sr", "ii", "iii", "iv"))
 
 
-def game_log(name, cache):
-    """20 derniers matchs (PTS/REB/AST), du plus récent au plus ancien."""
-    if name in cache:
-        return cache[name]
-    from nba_api.stats.static import players
-    from nba_api.stats.endpoints import playergamelog
-    found = players.find_players_by_full_name(name) or [
-        p for p in players.get_players() if norm(p["full_name"]) == norm(name)]
-    if not found:
-        cache[name] = None
-        return None
-    now = datetime.now()
-    y = now.year if now.month >= 10 else now.year - 1
-    games = []
-    for season in (f"{y}-{str(y + 1)[2:]}", f"{y - 1}-{str(y)[2:]}"):
-        df = None
-        for _ in range(2):
-            try:
-                time.sleep(0.7)  # stats.nba.com limite le débit
-                df = playergamelog.PlayerGameLog(player_id=found[0]["id"], season=season,
-                                                 timeout=12).get_data_frames()[0]
-                break
-            except Exception:
-                time.sleep(1)
-        STATS["ok" if df is not None else "ko"] += 1
-        if STATS["ko"] >= 3 and STATS["ok"] == 0:
-            sys.exit("stats.nba.com est injoignable depuis ce serveur (blocage probable).")
-        print("  stats", name, "OK" if df is not None else "échec", flush=True)
-        if df is not None:
-            games += df[["PTS", "REB", "AST"]].to_dict("records")
-        if len(games) >= 20:
-            break
-    cache[name] = games[:20] or None
-    return cache[name]
+def cdn_get(path):
+    import requests
+    err = None
+    for _ in range(2):
+        try:
+            r = requests.get(f"{CDN}/{path}", headers=HDR, timeout=15)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            err = e
+            time.sleep(1)
+    raise RuntimeError(f"cdn.nba.com injoignable ({err})")
+
+
+def load_logs(teams, n=20):
+    """Remplit LOGS avec les box scores des n derniers matchs de chaque équipe (CDN officiel NBA)."""
+    dates = cdn_get("staticData/scheduleLeagueV2_1.json")["leagueSchedule"]["gameDates"]
+    games = [g for d in dates for g in d["games"]
+             if g["gameStatus"] == 3 and g["gameId"].startswith("002")]
+    games.sort(key=lambda g: g["gameDateTimeUTC"], reverse=True)
+    count, pick = {t: 0 for t in teams}, {}
+    for g in games:
+        for side in ("homeTeam", "awayTeam"):
+            t = f'{g[side]["teamCity"]} {g[side]["teamName"]}'
+            if t in count and count[t] < n:
+                count[t] += 1
+                pick[g["gameId"]] = g
+    print(f"{len(pick)} box scores à lire", flush=True)
+    for gid, g in sorted(pick.items(), key=lambda kv: kv[1]["gameDateTimeUTC"], reverse=True):
+        box = cdn_get(f"liveData/boxscore/boxscore_{gid}.json")["game"]
+        for side in ("homeTeam", "awayTeam"):
+            for pl in box[side]["players"]:
+                st = pl["statistics"]
+                if not st.get("minutes") or st["minutes"].startswith("PT00M00"):
+                    continue  # n'a pas joué
+                LOGS.setdefault(norm(pl["name"]), []).append(
+                    {"PTS": st["points"], "REB": st["reboundsTotal"], "AST": st["assists"]})
+        time.sleep(0.2)
+    if not LOGS:
+        raise RuntimeError("aucune statistique récupérée")
+    print(len(LOGS), "joueurs avec stats", flush=True)
 
 
 def build_spots(props, cache):
     spots = []
     for (player, mk, side, line), (price, book) in props.items():
-        log = game_log(player, cache)
+        log = LOGS.get(norm(player), [])[:20]
         if not log:
             continue
         label, comps = MARKETS[mk]
@@ -183,7 +197,13 @@ def main():
         if dates and day not in dates:
             day = min(dates, key=lambda d: abs((d - day).days))
             print("Rien à la date demandée, repli sur", day)
-        for ev in [e for e in evs if e["local"].date() == day]:
+        today = [e for e in evs if e["local"].date() == day]
+        teams = {e["home_team"] for e in today} | {e["away_team"] for e in today}
+        try:
+            load_logs(teams)
+        except RuntimeError as ex:
+            sys.exit(f"Stats indisponibles : {ex}")
+        for ev in today:
             print("→", ev["away_team"], "@", ev["home_team"])
             spots = build_spots(get_props(key, ev, a.regions), cache)
             matches.append({"t": f'{ev["away_team"]} @ {ev["home_team"]}',
