@@ -1,9 +1,7 @@
 name: Spots NBA
 
 on:
-  schedule:
-    - cron: "0 8 * * *"   # tous les jours à 8h UTC
-  workflow_dispatch:       # bouton « Run workflow » pour lancer à la main
+  workflow_dispatch:       # lancement à la main uniquement (bouton « Run workflow »)
 
 permissions:
   contents: read
