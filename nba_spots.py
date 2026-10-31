@@ -3,8 +3,8 @@
 
 Installation : pip install requests
 Clé gratuite  : https://the-odds-api.com  (export ODDS_API_KEY=ta_cle)
-Usage         : python nba_spots.py            (matchs à J+1, heure de Paris)
-                python nba_spots.py --days 2   (autre jour)
+Usage         : python nba_spots.py            (matchs restants jusqu'à J+1 inclus, heure de Paris)
+                python nba_spots.py --days 0   (ce soir seulement) / --days 2 (jusqu'à J+2)
                 python nba_spots.py --demo     (fausses données, pour voir la page)
 """
 import argparse, json, os, random, re, sys, time, unicodedata
@@ -344,28 +344,39 @@ $("#min").oninput=e=>{MIN=parseFloat(e.target.value)||0;render()};render();
 </script></body></html>"""
 
 
+JOURS = ["lun", "mar", "mer", "jeu", "ven", "sam", "dim"]
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=1)
+    ap.add_argument("--days", type=int, default=1, help="jusqu'à J+N inclus (0 = ce soir seulement)")
     ap.add_argument("--regions", default="us")
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--out", default="nba_spots.html")
     a = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)
-    day = (datetime.now(PARIS) + timedelta(days=a.days)).date()
+    now = datetime.now(PARIS)
+    last = (now + timedelta(days=a.days)).date()
+    label = f"{now:%d/%m} → {last:%d/%m}"
     if a.demo:
         matches = demo()
     else:
         key = os.environ.get("ODDS_API_KEY") or sys.exit("Définis ODDS_API_KEY (clé gratuite sur the-odds-api.com)")
         cache, matches = {}, []
-        evs = get_events(key)
-        dates = sorted({e["local"].date() for e in evs})
-        print("Dates listées par l'API :", [d.isoformat() for d in dates])
-        if dates and day not in dates:
-            day = min(dates, key=lambda d: abs((d - day).days))
-            print("Rien à la date demandée, repli sur", day)
-        today = [e for e in evs if e["local"].date() == day]
-        teams = {e["home_team"] for e in today} | {e["away_team"] for e in today}
+        evs = sorted(get_events(key), key=lambda e: e["local"])
+        print("Dates listées par l'API :", sorted({e["local"].date().isoformat() for e in evs}))
+        # matchs pas encore commencés, d'ici la fin de J+N (heure de Paris)
+        sel = [e for e in evs if e["local"] > now and e["local"].date() <= last]
+        if not sel:
+            fut = [e for e in evs if e["local"] > now]
+            if fut:
+                d = fut[0]["local"].date()
+                sel = [e for e in fut if e["local"].date() == d]
+                print("Rien dans la période, repli sur le", d)
+        if sel:
+            label = f'{sel[0]["local"]:%d/%m} → {sel[-1]["local"]:%d/%m}'
+        print(f"{len(sel)} matchs retenus (environ {len(sel) * len(MARKETS)} crédits Odds API)")
+        teams = {e["home_team"] for e in sel} | {e["away_team"] for e in sel}
         try:
             load_logs(teams)
         except RuntimeError as ex:
@@ -375,16 +386,17 @@ def main():
                 load_logs_csv(teams)
             except RuntimeError as ex2:
                 sys.exit(f"Stats indisponibles : {ex2}")
-        for ev in today:
+        for ev in sel:
             print("→", ev["away_team"], "@", ev["home_team"])
             spots = build_spots(get_props(key, ev, a.regions), cache)
+            l = ev["local"]
             matches.append({"t": f'{ev["away_team"]} @ {ev["home_team"]}',
-                            "h": ev["local"].strftime("%H:%M"), "spots": spots})
+                            "h": f"{JOURS[l.weekday()]} {l:%d/%m %H:%M}", "spots": spots})
     repo = os.environ.get("GITHUB_REPOSITORY")
     link = (f'· <a href="https://github.com/{repo}/actions/workflows/nba.yml">Relancer</a>'
             if repo else "")
-    html = PAGE.replace("__DAY__", day.strftime("%d/%m/%Y")).replace(
-        "__NOW__", datetime.now(PARIS).strftime("%d/%m à %H:%M")).replace("__LINK__", link).replace(
+    html = PAGE.replace("__DAY__", label).replace(
+        "__NOW__", now.strftime("%d/%m à %H:%M")).replace("__LINK__", link).replace(
         "__DATA__", json.dumps({"matches": matches, "logs": collect_logs(matches)}, ensure_ascii=False))
     with open(a.out, "w", encoding="utf-8") as f:
         f.write(html)
